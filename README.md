@@ -39,10 +39,13 @@ automatically and can be forced with `--mode`:
 In the headset the thermal image is a head-locked panel sized to the camera's
 field of view, so it lines up with what you're looking at.
 
-Experimental (off by default until confirmed safe on the Frame):
-`--dashboard` adds a **Thermal Camera** control panel to the SteamVR
-dashboard (show/hide, palette, detail mode, opacity, size, °C/°F, Quit), and
-`--overlay-buffering double` switches to two alternating panels.
+Frames alternate between two overlay panels, each shown only once SteamVR
+has loaded it; a single panel strobes on the Frame (`--overlay-buffering
+single` brings that back for testing).
+
+Experimental (off by default): `--dashboard` adds a **Thermal Camera**
+control panel to the SteamVR dashboard (show/hide, palette, detail mode,
+opacity, size, °C/°F, Quit).
 
 Every run writes `thermal-viewer.log` next to the program; send it along
 with any problem report.

@@ -63,7 +63,7 @@ void usage() {
         "  --no-hud               hide crosshair, markers, text and colour bar\n"
         "  --overlay-distance M   --overlay-hfov DEG   --overlay-alpha A   --overlay-offset-y M\n"
         "  --dashboard            add a control panel to the SteamVR dashboard (experimental)\n"
-        "  --overlay-buffering B  single|double (default single)\n"
+        "  --overlay-buffering B  double|single (default double; single strobes on the Frame)\n"
         "  --log FILE             log file (default: thermal-viewer.log next to the program)\n"
         "  --frames N             stop after N frames      --snapshot FILE.png   save last frame\n"
         "  --config FILE          read options from FILE (default: thermal-viewer.conf next\n"

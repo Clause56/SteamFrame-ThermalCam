@@ -22,7 +22,7 @@ struct OverlayConfig {
     float alpha = 0.85f;      // overlay opacity (lets passthrough show through)
     float offsetYM = 0.0f;    // vertical offset (camera is usually above eye level)
     bool dashboard = false;   // control panel in the SteamVR dashboard (opt-in until proven on the Frame)
-    bool doubleBuffer = false;  // ping-pong between two overlays (opt-in)
+    bool doubleBuffer = true;   // ping-pong between two overlays (single panel strobes on the Frame)
 };
 
 // Current settings, so a display can show them (e.g. on dashboard buttons).
