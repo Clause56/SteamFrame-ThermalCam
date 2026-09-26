@@ -18,6 +18,7 @@
 #include "../display/display.h"
 #include "../thermal/renderer.h"
 #include "../thermal/thermal_frame.h"
+#include "../util/log.h"
 #include "../util/png.h"
 #include "sources.h"
 
@@ -61,7 +62,9 @@ void usage() {
         "  --fahrenheit           show temperatures in F\n"
         "  --no-hud               hide crosshair, markers, text and colour bar\n"
         "  --overlay-distance M   --overlay-hfov DEG   --overlay-alpha A   --overlay-offset-y M\n"
-        "  --no-dashboard         don't add the control panel to the SteamVR dashboard\n"
+        "  --dashboard            add a control panel to the SteamVR dashboard (experimental)\n"
+        "  --overlay-buffering B  single|double (default single)\n"
+        "  --log FILE             log file (default: thermal-viewer.log next to the program)\n"
         "  --frames N             stop after N frames      --snapshot FILE.png   save last frame\n"
         "  --config FILE          read options from FILE (default: thermal-viewer.conf next\n"
         "                         to the program; one or more options per line, # comments)\n"
@@ -156,6 +159,7 @@ int main(int argc, char** argv) {
         }
     std::vector<std::string> args = readConfig(configPath, configRequired);
     for (int i = 1; i < argc; ++i) args.push_back(argv[i]);
+    std::string logPath = exeDir() + "/thermal-viewer.log";
 
     uint16_t vid = 0, pid = 0;
     bool sim = false;
@@ -192,6 +196,13 @@ int main(int argc, char** argv) {
         else if (a == "--gain") { if (!thermal::parseGainMode(next(), ropt.gain)) { fprintf(stderr, "bad --gain\n"); return 2; } }
         else if (a == "--detail") ropt.detail = float(atof(next()));
         else if (a == "--no-dashboard") ocfg.dashboard = false;
+        else if (a == "--dashboard") ocfg.dashboard = true;
+        else if (a == "--overlay-buffering") {
+            std::string b = next();
+            if (b != "single" && b != "double") { fprintf(stderr, "bad --overlay-buffering\n"); return 2; }
+            ocfg.doubleBuffer = b == "double";
+        }
+        else if (a == "--log") logPath = next();
         else if (a == "--config") next();
         else if (a == "--register") return registerWithSteamVR(true, exeDir());
         else if (a == "--unregister") return registerWithSteamVR(false, exeDir());
@@ -210,6 +221,13 @@ int main(int argc, char** argv) {
         else { fprintf(stderr, "unknown option %s\n\n", a.c_str()); usage(); return 2; }
     }
 
+    logOpen(logPath);
+    {
+        std::string all;
+        for (const auto& a : args) all += " " + a;
+        logMsg("thermal-viewer starting:%s", all.c_str());
+    }
+
     std::unique_ptr<Display> display;
     if (displayName == "desktop") display = makeDesktopDisplay();
     else if (displayName == "overlay") display = makeOverlayDisplay(ocfg);
@@ -220,8 +238,9 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::string err;
+        logMsg("starting %s display", display->name());
         if (!display->init(err)) {
-            fprintf(stderr, "%s display: %s\n", display->name(), err.c_str());
+            logMsg("%s display: %s", display->name(), err.c_str());
             return 1;
         }
     }
@@ -232,11 +251,11 @@ int main(int argc, char** argv) {
 
     FrameMailbox box;
     if (!src->start(box)) {
-        fprintf(stderr, "camera: %s\n", src->error().c_str());
+        logMsg("camera: %s", src->error().c_str());
         fprintf(stderr, "run with --list to see what libusb can find, or --sim to test without a camera\n");
         return 1;
     }
-    printf("streaming: %s\n", src->describe().c_str());
+    logMsg("streaming: %s", src->describe().c_str());
 
     thermal::Renderer renderer;
     thermal::ThermalFrame tf;
@@ -269,7 +288,7 @@ int main(int argc, char** argv) {
         auto now = std::chrono::steady_clock::now();
         if (!box.take(raw, 50)) {
             if (!warnedStall && now - lastFrame > std::chrono::seconds(3)) {
-                fprintf(stderr, "no frames for 3 s (%s) %s\n", src->stats().c_str(), src->error().c_str());
+                logMsg("no frames for 3 s (%s) %s", src->stats().c_str(), src->error().c_str());
                 warnedStall = true;
             }
             continue;
@@ -296,7 +315,7 @@ int main(int argc, char** argv) {
 
         if (now - lastLog > std::chrono::seconds(5)) {
             const auto& s = renderer.lastStats();
-            printf("frame %ld  min %.1f  max %.1f  centre %.1f  | %s\n", frames, s.min, s.max, s.center,
+            logMsg("frame %ld  min %.1f  max %.1f  centre %.1f  | %s", frames, s.min, s.max, s.center,
                    src->stats().c_str());
             lastLog = now;
         }
@@ -309,6 +328,6 @@ int main(int argc, char** argv) {
         printf("%s %s\n", ok ? "saved" : "failed to save", snapshot.c_str());
         if (!ok) return 1;
     }
-    printf("done: %ld frames  %s\n", frames, src->stats().c_str());
+    logMsg("done: %ld frames  %s%s", frames, src->stats().c_str(), gStop ? " (stopped by signal)" : "");
     return 0;
 }

@@ -13,7 +13,10 @@
 #include <openvr.h>
 #include <unistd.h>
 
+#include "../util/log.h"
+
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -41,13 +44,6 @@ std::string findAppKey(const std::string& binaryPath) {
     return {};
 }
 
-std::string selfPath() {
-    char buf[4096];
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
-    if (n <= 0) return {};
-    buf[n] = 0;
-    return buf;
-}
 
 constexpr uint32_t rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
     return uint32_t(r) | (uint32_t(g) << 8) | (uint32_t(b) << 16) | (uint32_t(a) << 24);
@@ -84,16 +80,16 @@ public:
             err = "IVROverlay unavailable";
             return false;
         }
-        // Let SteamVR associate this process with the registered app, if any.
-        std::string key = findAppKey(selfPath());
-        if (!key.empty()) vr::VRApplications()->IdentifyApplication(uint32_t(getpid()), key.c_str());
+        logMsg("overlay: SteamVR connected (%s buffering, dashboard %s)", cfg_.doubleBuffer ? "double" : "single",
+               cfg_.dashboard ? "on" : "off");
 
-        // Two overlays used as a double buffer: each new frame is uploaded to
-        // the hidden one and only shown once SteamVR has finished loading it.
-        // Re-uploading a single visible overlay makes it blank out while the
-        // new image loads, which is what caused the strobing.
+        // Single mode (default): one overlay, and a new frame is only sent
+        // once SteamVR reports the previous one loaded. Sending frames faster
+        // than SteamVR loads them is the likely cause of the strobing.
+        // Double mode: two overlays, upload to the hidden one and swap.
         const char* keys[2] = {"thermal.viewer.a", "thermal.viewer.b"};
-        for (int i = 0; i < 2; ++i) {
+        const int count = cfg_.doubleBuffer ? 2 : 1;
+        for (int i = 0; i < count; ++i) {
             vr::EVROverlayError oe = ov->CreateOverlay(keys[i], "Thermal Camera", &ov_[i]);
             if (oe != vr::VROverlayError_None) {
                 err = std::string("CreateOverlay: ") + ov->GetOverlayErrorNameFromEnum(oe);
@@ -102,6 +98,8 @@ public:
             ov->SetOverlayAlpha(ov_[i], alpha_);
             ov->SetOverlaySortOrder(ov_[i], 100);
         }
+        if (!cfg_.doubleBuffer) ov->ShowOverlay(ov_[0]);
+        logMsg("overlay: created %d panel(s)", count);
 
         if (cfg_.dashboard) {
             vr::EVROverlayError oe = ov->CreateDashboardOverlay("thermal.viewer.dashboard", "Thermal Camera", &dash_, &thumb_);
@@ -112,8 +110,9 @@ public:
                 ov->SetOverlayMouseScale(dash_, &scale);
                 drawThumbnail();
                 drawDashboard();
+                logMsg("overlay: dashboard panel created");
             } else {
-                fprintf(stderr, "dashboard panel unavailable: %s\n", ov->GetOverlayErrorNameFromEnum(oe));
+                logMsg("dashboard panel unavailable: %s", ov->GetOverlayErrorNameFromEnum(oe));
                 dash_ = thumb_ = vr::k_ulOverlayHandleInvalid;
             }
         }
@@ -131,29 +130,58 @@ public:
             lastImgY_ = img.imageY;
             place();
         }
-        // No load confirmation arrived within a frame: swap anyway, the
-        // upload of a small image finishes well within one frame period.
-        if (pending_) swap();
-        int back = 1 - front_;
+        using clock = std::chrono::steady_clock;
+        auto now = clock::now();
+        if (loading_) {
+            // Still loading the previous frame: drop this one rather than
+            // interrupting the load. Give up waiting after a while in case the
+            // runtime never sends VREvent_ImageLoaded.
+            auto limit = std::chrono::milliseconds(loadedEvents_ ? 250 : 80);
+            if (now - uploadStart_ < limit) {
+                ++dropped_;
+                return;
+            }
+            if (cfg_.doubleBuffer) swap();
+            loading_ = false;
+        }
+        int target = cfg_.doubleBuffer ? 1 - front_ : 0;
         vr::EVROverlayError e =
-            vr::VROverlay()->SetOverlayRaw(ov_[back], const_cast<uint8_t*>(img.px.data()), img.width, img.height, 4);
+            vr::VROverlay()->SetOverlayRaw(ov_[target], const_cast<uint8_t*>(img.px.data()), img.width, img.height, 4);
         if (e != vr::VROverlayError_None) {
-            if (!warnedUpload_)
-                fprintf(stderr, "SetOverlayRaw: %s\n", vr::VROverlay()->GetOverlayErrorNameFromEnum(e));
+            if (!warnedUpload_) logMsg("SetOverlayRaw: %s", vr::VROverlay()->GetOverlayErrorNameFromEnum(e));
             warnedUpload_ = true;
             return;
         }
-        pending_ = true;
+        if (!uploads_) logMsg("overlay: first frame sent (%dx%d)", img.width, img.height);
+        ++uploads_;
+        loading_ = true;
+        uploadStart_ = now;
+        if (now - lastReport_ > std::chrono::seconds(10)) {
+            logMsg("overlay: %llu frames sent, %llu load confirmations, %llu dropped while loading",
+                   (unsigned long long)uploads_, (unsigned long long)loadedEvents_, (unsigned long long)dropped_);
+            lastReport_ = now;
+        }
     }
 
     DisplayEvents poll() override {
         DisplayEvents ev;
         vr::VREvent_t e;
-        for (int i = 0; i < 2; ++i)
+        for (int i = 0; i < 2; ++i) {
+            if (ov_[i] == vr::k_ulOverlayHandleInvalid) continue;
             while (vr::VROverlay()->PollNextOverlayEvent(ov_[i], &e, sizeof e)) {
-                if (e.eventType == vr::VREvent_ImageLoaded && pending_ && i == 1 - front_) swap();
+                if (e.eventType == vr::VREvent_ImageLoaded) {
+                    if (!loadedEvents_) logMsg("overlay: SteamVR confirms image loads");
+                    ++loadedEvents_;
+                    int target = cfg_.doubleBuffer ? 1 - front_ : 0;
+                    if (loading_ && i == target) {
+                        if (cfg_.doubleBuffer) swap();
+                        loading_ = false;
+                    }
+                }
+                if (e.eventType == vr::VREvent_ImageFailed) logMsg("overlay: SteamVR failed to load a frame");
                 if (e.eventType == vr::VREvent_Quit) ev.quit = true;
             }
+        }
         if (dash_ != vr::k_ulOverlayHandleInvalid)
             while (vr::VROverlay()->PollNextOverlayEvent(dash_, &e, sizeof e)) {
                 if (e.eventType == vr::VREvent_MouseButtonUp) click(e.data.mouse.x, kDashH - e.data.mouse.y, ev);
@@ -185,7 +213,6 @@ private:
             vr::VROverlay()->HideOverlay(ov_[front_]);
         }
         front_ = back;
-        pending_ = false;
     }
 
     // Sizes and positions both panels so the thermal image itself (not the HUD
@@ -201,6 +228,7 @@ private:
         float dy = -((lastH_ / 2.f) - (lastImgY_ + imgH / 2.f)) * mpp;
         vr::HmdMatrix34_t m = {{{1, 0, 0, dx}, {0, 1, 0, cfg_.offsetYM + dy}, {0, 0, 1, -cfg_.distanceM}}};
         for (auto h : ov_) {
+            if (h == vr::k_ulOverlayHandleInvalid) continue;
             vr::VROverlay()->SetOverlayWidthInMeters(h, mpp * lastW_);
             vr::VROverlay()->SetOverlayTransformTrackedDeviceRelative(h, vr::k_unTrackedDeviceIndex_Hmd, &m);
         }
@@ -212,8 +240,12 @@ private:
             switch (b.id) {
                 case BtnToggle:
                     visible_ = !visible_;
-                    for (auto h : ov_) vr::VROverlay()->HideOverlay(h);
-                    pending_ = false;  // the next frame re-shows the view
+                    for (auto h : ov_)
+                        if (h != vr::k_ulOverlayHandleInvalid) {
+                            if (visible_ && !cfg_.doubleBuffer) vr::VROverlay()->ShowOverlay(h);
+                            else vr::VROverlay()->HideOverlay(h);
+                        }
+                    loading_ = false;
                     break;
                 case BtnPalette: ev.nextPalette = true; break;
                 case BtnGain: ev.nextGain = true; break;
@@ -222,7 +254,8 @@ private:
                 case BtnOpacityDown:
                 case BtnOpacityUp:
                     alpha_ = std::clamp(alpha_ + (b.id == BtnOpacityUp ? 0.1f : -0.1f), 0.2f, 1.f);
-                    for (auto h : ov_) vr::VROverlay()->SetOverlayAlpha(h, alpha_);
+                    for (auto h : ov_)
+                        if (h != vr::k_ulOverlayHandleInvalid) vr::VROverlay()->SetOverlayAlpha(h, alpha_);
                     break;
                 case BtnSizeDown:
                 case BtnSizeUp:
@@ -306,7 +339,9 @@ private:
     vr::VROverlayHandle_t ov_[2] = {vr::k_ulOverlayHandleInvalid, vr::k_ulOverlayHandleInvalid};
     vr::VROverlayHandle_t dash_ = vr::k_ulOverlayHandleInvalid, thumb_ = vr::k_ulOverlayHandleInvalid;
     int front_ = 0;
-    bool pending_ = false;
+    bool loading_ = false;
+    std::chrono::steady_clock::time_point uploadStart_{}, lastReport_{};
+    unsigned long long uploads_ = 0, loadedEvents_ = 0, dropped_ = 0;
     bool visible_ = true;
     bool inited_ = false;
     bool warnedUpload_ = false;

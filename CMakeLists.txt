@@ -24,6 +24,7 @@ add_library(thermal_core STATIC
   src/thermal/thermal_frame.cpp
   src/thermal/renderer.cpp
   src/util/png.cpp
+  src/util/log.cpp
   src/app/sources.cpp)
 target_link_libraries(thermal_core PUBLIC PkgConfig::LIBUSB Threads::Threads)
 

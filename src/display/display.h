@@ -21,7 +21,8 @@ struct OverlayConfig {
     float hfovDeg = 56.0f;    // camera horizontal field of view, for true-scale sizing
     float alpha = 0.85f;      // overlay opacity (lets passthrough show through)
     float offsetYM = 0.0f;    // vertical offset (camera is usually above eye level)
-    bool dashboard = true;    // control panel in the SteamVR dashboard
+    bool dashboard = false;   // control panel in the SteamVR dashboard (opt-in until proven on the Frame)
+    bool doubleBuffer = false;  // ping-pong between two overlays (opt-in)
 };
 
 // Current settings, so a display can show them (e.g. on dashboard buttons).

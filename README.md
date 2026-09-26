@@ -37,9 +37,15 @@ automatically and can be forced with `--mode`:
    it by hand instead. Run these as your normal user, not root.
 
 In the headset the thermal image is a head-locked panel sized to the camera's
-field of view, so it lines up with what you're looking at. Open the SteamVR
-dashboard and pick **Thermal Camera** for its control panel: show/hide the
-view, palette, detail mode, opacity, size, °C/°F and Quit.
+field of view, so it lines up with what you're looking at.
+
+Experimental (off by default until confirmed safe on the Frame):
+`--dashboard` adds a **Thermal Camera** control panel to the SteamVR
+dashboard (show/hide, palette, detail mode, opacity, size, °C/°F, Quit), and
+`--overlay-buffering double` switches to two alternating panels.
+
+Every run writes `thermal-viewer.log` next to the program; send it along
+with any problem report.
 
 Settings live in `thermal-viewer.conf` next to the program (alignment,
 palette, detail mode, rotation). Command-line options override it.
