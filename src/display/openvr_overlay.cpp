@@ -23,6 +23,32 @@ namespace {
 
 constexpr const char* kAppKey = "thermal.viewer";
 
+// SteamVR doesn't always file an added manifest under its app_key: some
+// versions register it under a generated key (e.g. "system.generated.*").
+// Find the entry that launches our binary, trying the declared key first.
+std::string findAppKey(const std::string& binaryPath) {
+    vr::IVRApplications* apps = vr::VRApplications();
+    if (!apps) return {};
+    if (apps->IsApplicationInstalled(kAppKey)) return kAppKey;
+    char key[vr::k_unMaxApplicationKeyLength], path[4096];
+    for (uint32_t i = 0, n = apps->GetApplicationCount(); i < n; ++i) {
+        if (apps->GetApplicationKeyByIndex(i, key, sizeof key) != vr::VRApplicationError_None) continue;
+        vr::EVRApplicationError err = vr::VRApplicationError_None;
+        apps->GetApplicationPropertyString(key, vr::VRApplicationProperty_BinaryPath_String, path, sizeof path, &err);
+        if (err == vr::VRApplicationError_None && binaryPath == path) return key;
+        if (std::string(key).find("thermal.viewer") != std::string::npos) return key;
+    }
+    return {};
+}
+
+std::string selfPath() {
+    char buf[4096];
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
+    if (n <= 0) return {};
+    buf[n] = 0;
+    return buf;
+}
+
 constexpr uint32_t rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
     return uint32_t(r) | (uint32_t(g) << 8) | (uint32_t(b) << 16) | (uint32_t(a) << 24);
 }
@@ -59,8 +85,8 @@ public:
             return false;
         }
         // Let SteamVR associate this process with the registered app, if any.
-        if (vr::VRApplications() && vr::VRApplications()->IsApplicationInstalled(kAppKey))
-            vr::VRApplications()->IdentifyApplication(uint32_t(getpid()), kAppKey);
+        std::string key = findAppKey(selfPath());
+        if (!key.empty()) vr::VRApplications()->IdentifyApplication(uint32_t(getpid()), key.c_str());
 
         // Two overlays used as a double buffer: each new frame is uploaded to
         // the hidden one and only shown once SteamVR has finished loading it.
@@ -310,13 +336,14 @@ int registerWithSteamVR(bool enable, const std::string& exeDir) {
                 "    \"app_key\": \"%s\",\n"
                 "    \"launch_type\": \"binary\",\n"
                 "    \"binary_path_linux\": \"%s/thermal-viewer\",\n"
+                "    \"binary_path_linuxarm64\": \"%s/thermal-viewer\",\n"
                 "    \"arguments\": \"--display overlay\",\n"
                 "    \"is_dashboard_overlay\": true,\n"
                 "    \"strings\": { \"en_us\": { \"name\": \"Thermal Camera\",\n"
                 "      \"description\": \"Head-locked view of a USB thermal camera\" } }\n"
                 "  }]\n"
                 "}\n",
-                kAppKey, exeDir.c_str());
+                kAppKey, exeDir.c_str(), exeDir.c_str());
         fclose(f);
     }
     vr::EVRInitError e = vr::VRInitError_None;
@@ -327,18 +354,40 @@ int registerWithSteamVR(bool enable, const std::string& exeDir) {
     }
     vr::IVRApplications* apps = vr::VRApplications();
     int rc = 0;
+    const std::string binary = exeDir + "/thermal-viewer";
     if (enable) {
         vr::EVRApplicationError ae = apps->AddApplicationManifest(manifest.c_str(), false);
-        if (ae == vr::VRApplicationError_None) ae = apps->SetApplicationAutoLaunch(kAppKey, true);
         if (ae != vr::VRApplicationError_None) {
-            fprintf(stderr, "SteamVR registration failed: %s\n", apps->GetApplicationsErrorNameFromEnum(ae));
+            fprintf(stderr, "SteamVR rejected %s: %s\n", manifest.c_str(), apps->GetApplicationsErrorNameFromEnum(ae));
+            vr::VR_Shutdown();
+            return 1;
+        }
+        // The manifest is processed asynchronously; give SteamVR a moment.
+        std::string key;
+        for (int i = 0; i < 50 && key.empty(); ++i) {
+            key = findAppKey(binary);
+            if (key.empty()) usleep(100000);
+        }
+        if (key.empty()) {
+            fprintf(stderr,
+                    "SteamVR accepted the manifest but hasn't listed the app yet.\n"
+                    "Restart SteamVR and run --register again. Manifest: %s\n",
+                    manifest.c_str());
+            rc = 1;
+        } else if ((ae = apps->SetApplicationAutoLaunch(key.c_str(), true)) != vr::VRApplicationError_None) {
+            fprintf(stderr,
+                    "Added to SteamVR as '%s', but auto-launch failed (%s).\n"
+                    "Turn it on by hand: SteamVR Settings > Startup/Shutdown > Choose Startup Overlay Apps.\n",
+                    key.c_str(), apps->GetApplicationsErrorNameFromEnum(ae));
             rc = 1;
         } else {
-            printf("Registered. Thermal Camera now starts with SteamVR (toggle it under\n"
-                   "SteamVR Settings > Startup/Shutdown > Choose Startup Overlay Apps).\n");
+            printf("Registered as '%s'. Thermal Camera now starts with SteamVR (toggle it under\n"
+                   "SteamVR Settings > Startup/Shutdown > Choose Startup Overlay Apps).\n",
+                   key.c_str());
         }
     } else {
-        if (apps->IsApplicationInstalled(kAppKey)) apps->SetApplicationAutoLaunch(kAppKey, false);
+        std::string key = findAppKey(binary);
+        if (!key.empty()) apps->SetApplicationAutoLaunch(key.c_str(), false);
         apps->RemoveApplicationManifest(manifest.c_str());
         printf("Removed from SteamVR.\n");
     }
