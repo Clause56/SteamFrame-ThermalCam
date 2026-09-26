@@ -1,0 +1,7 @@
+# Lets the logged-in user open cheap UVC thermal cameras from userland
+# (libusb), which thermal-viewer needs because the headset kernel has no
+# uvcvideo driver. Add a line for your camera if it isn't listed:
+#   lsusb  ->  "ID 0bda:5840 ..."  ->  ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="5840"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="5840", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="5830", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1e4e", ATTRS{idProduct}=="0100", MODE="0666", TAG+="uaccess"

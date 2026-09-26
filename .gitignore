@@ -1,0 +1,5 @@
+/build/
+/.build-arm64/
+/dist/
+*.png
+!docs/*.png
