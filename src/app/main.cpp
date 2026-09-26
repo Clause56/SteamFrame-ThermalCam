@@ -286,7 +286,7 @@ int main(int argc, char** argv) {
         }
 
         auto now = std::chrono::steady_clock::now();
-        if (!box.take(raw, 50)) {
+        if (!box.take(raw, 10)) {  // short wait keeps overlay events flowing
             if (!warnedStall && now - lastFrame > std::chrono::seconds(3)) {
                 logMsg("no frames for 3 s (%s) %s", src->stats().c_str(), src->error().c_str());
                 warnedStall = true;

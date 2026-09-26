@@ -130,58 +130,32 @@ public:
             lastImgY_ = img.imageY;
             place();
         }
-        using clock = std::chrono::steady_clock;
-        auto now = clock::now();
+        // Pick up a load confirmation that arrived since the last poll, so a
+        // frame that is ready to go isn't held back by loop timing.
+        pumpPanelEvents();
         if (loading_) {
-            // Still loading the previous frame: drop this one rather than
-            // interrupting the load. Give up waiting after a while in case the
-            // runtime never sends VREvent_ImageLoaded.
             auto limit = std::chrono::milliseconds(loadedEvents_ ? 250 : 80);
-            if (now - uploadStart_ < limit) {
-                ++dropped_;
+            if (std::chrono::steady_clock::now() - uploadStart_ < limit) {
+                // Keep only the newest frame; it goes out as soon as the load
+                // in progress finishes.
+                if (hasQueued_) ++dropped_;
+                queued_ = img;
+                hasQueued_ = true;
                 return;
             }
+            // No confirmation: the runtime may not send them. Move on.
             if (cfg_.doubleBuffer) swap();
             loading_ = false;
         }
-        int target = cfg_.doubleBuffer ? 1 - front_ : 0;
-        vr::EVROverlayError e =
-            vr::VROverlay()->SetOverlayRaw(ov_[target], const_cast<uint8_t*>(img.px.data()), img.width, img.height, 4);
-        if (e != vr::VROverlayError_None) {
-            if (!warnedUpload_) logMsg("SetOverlayRaw: %s", vr::VROverlay()->GetOverlayErrorNameFromEnum(e));
-            warnedUpload_ = true;
-            return;
-        }
-        if (!uploads_) logMsg("overlay: first frame sent (%dx%d)", img.width, img.height);
-        ++uploads_;
-        loading_ = true;
-        uploadStart_ = now;
-        if (now - lastReport_ > std::chrono::seconds(10)) {
-            logMsg("overlay: %llu frames sent, %llu load confirmations, %llu dropped while loading",
-                   (unsigned long long)uploads_, (unsigned long long)loadedEvents_, (unsigned long long)dropped_);
-            lastReport_ = now;
-        }
+        hasQueued_ = false;
+        upload(img);
     }
 
     DisplayEvents poll() override {
         DisplayEvents ev;
         vr::VREvent_t e;
-        for (int i = 0; i < 2; ++i) {
-            if (ov_[i] == vr::k_ulOverlayHandleInvalid) continue;
-            while (vr::VROverlay()->PollNextOverlayEvent(ov_[i], &e, sizeof e)) {
-                if (e.eventType == vr::VREvent_ImageLoaded) {
-                    if (!loadedEvents_) logMsg("overlay: SteamVR confirms image loads");
-                    ++loadedEvents_;
-                    int target = cfg_.doubleBuffer ? 1 - front_ : 0;
-                    if (loading_ && i == target) {
-                        if (cfg_.doubleBuffer) swap();
-                        loading_ = false;
-                    }
-                }
-                if (e.eventType == vr::VREvent_ImageFailed) logMsg("overlay: SteamVR failed to load a frame");
-                if (e.eventType == vr::VREvent_Quit) ev.quit = true;
-            }
-        }
+        pumpPanelEvents();
+        if (quit_) ev.quit = true;
         if (dash_ != vr::k_ulOverlayHandleInvalid)
             while (vr::VROverlay()->PollNextOverlayEvent(dash_, &e, sizeof e)) {
                 if (e.eventType == vr::VREvent_MouseButtonUp) click(e.data.mouse.x, kDashH - e.data.mouse.y, ev);
@@ -205,6 +179,53 @@ public:
 
 private:
     static constexpr int kDashW = 640, kDashH = 420;
+
+    void upload(const thermal::RgbaImage& img) {
+        int target = cfg_.doubleBuffer ? 1 - front_ : 0;
+        vr::EVROverlayError e =
+            vr::VROverlay()->SetOverlayRaw(ov_[target], const_cast<uint8_t*>(img.px.data()), img.width, img.height, 4);
+        if (e != vr::VROverlayError_None) {
+            if (!warnedUpload_) logMsg("SetOverlayRaw: %s", vr::VROverlay()->GetOverlayErrorNameFromEnum(e));
+            warnedUpload_ = true;
+            return;
+        }
+        auto now = std::chrono::steady_clock::now();
+        if (!uploads_) logMsg("overlay: first frame sent (%dx%d)", img.width, img.height);
+        ++uploads_;
+        loading_ = true;
+        uploadStart_ = now;
+        if (now - lastReport_ > std::chrono::seconds(10)) {
+            logMsg("overlay: %llu frames sent, %llu load confirmations, %llu skipped (newer frame arrived)",
+                   uploads_, loadedEvents_, dropped_);
+            lastReport_ = now;
+        }
+    }
+
+    // Handles the image panels' events: load confirmations (which release
+    // the next queued frame) and quit requests.
+    void pumpPanelEvents() {
+        vr::VREvent_t e;
+        for (int i = 0; i < 2; ++i) {
+            if (ov_[i] == vr::k_ulOverlayHandleInvalid) continue;
+            while (vr::VROverlay()->PollNextOverlayEvent(ov_[i], &e, sizeof e)) {
+                if (e.eventType == vr::VREvent_ImageLoaded) {
+                    if (!loadedEvents_) logMsg("overlay: SteamVR confirms image loads");
+                    ++loadedEvents_;
+                    int target = cfg_.doubleBuffer ? 1 - front_ : 0;
+                    if (loading_ && i == target) {
+                        if (cfg_.doubleBuffer) swap();
+                        loading_ = false;
+                        if (hasQueued_ && visible_) {
+                            hasQueued_ = false;
+                            upload(queued_);
+                        }
+                    }
+                }
+                if (e.eventType == vr::VREvent_ImageFailed) logMsg("overlay: SteamVR failed to load a frame");
+                if (e.eventType == vr::VREvent_Quit) quit_ = true;
+            }
+        }
+    }
 
     void swap() {
         int back = 1 - front_;
@@ -246,6 +267,7 @@ private:
                             else vr::VROverlay()->HideOverlay(h);
                         }
                     loading_ = false;
+                    hasQueued_ = false;
                     break;
                 case BtnPalette: ev.nextPalette = true; break;
                 case BtnGain: ev.nextGain = true; break;
@@ -340,6 +362,9 @@ private:
     vr::VROverlayHandle_t dash_ = vr::k_ulOverlayHandleInvalid, thumb_ = vr::k_ulOverlayHandleInvalid;
     int front_ = 0;
     bool loading_ = false;
+    bool quit_ = false;
+    bool hasQueued_ = false;
+    thermal::RgbaImage queued_;
     std::chrono::steady_clock::time_point uploadStart_{}, lastReport_{};
     unsigned long long uploads_ = 0, loadedEvents_ = 0, dropped_ = 0;
     bool visible_ = true;
