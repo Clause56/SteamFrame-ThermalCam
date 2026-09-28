@@ -22,7 +22,7 @@ struct OverlayConfig {
     float alpha = 0.35f;      // overlay opacity (lets passthrough show through)
     float size = 0.95f;       // panel size relative to true scale
     float offsetYM = 0.0f;    // vertical offset (camera is usually above eye level)
-    bool dashboard = false;   // control panel in the SteamVR dashboard (opt-in until proven on the Frame)
+    bool dashboard = true;    // control panel in the SteamVR dashboard (confirmed working on the Frame)
     bool doubleBuffer = true;   // ping-pong between two overlays (single panel strobes on the Frame)
 };
 

@@ -63,7 +63,7 @@ void usage() {
         "  --no-hud               hide crosshair, markers, text and colour bar\n"
         "  --overlay-distance M   --overlay-hfov DEG   --overlay-alpha A   --overlay-offset-y M\n"
         "  --overlay-size X       panel size relative to true scale (default 0.95)\n"
-        "  --dashboard            add a control panel to the SteamVR dashboard (experimental)\n"
+        "  --no-dashboard         don't add the control panel to the SteamVR dashboard\n"
         "  --overlay-buffering B  double|single (default double; single strobes on the Frame)\n"
         "  --log FILE             log file (default: thermal-viewer.log next to the program)\n"
         "  --frames N             stop after N frames      --snapshot FILE.png   save last frame\n"

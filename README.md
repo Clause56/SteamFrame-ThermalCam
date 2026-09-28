@@ -30,11 +30,14 @@ automatically and can be forced with `--mode`:
    camera's `VID:PID` from `lsusb` as an argument if it's not an InfiRay /
    Topdon / PureThermal). Replug the camera.
 3. Check the camera is found: `./thermal-viewer --list`.
-4. With SteamVR running, register it once: `./thermal-viewer --register`.
-   From then on it starts with SteamVR, like any other overlay app (toggle it
-   in SteamVR Settings > Startup/Shutdown > Choose Startup Overlay Apps).
-   `./thermal-viewer --unregister` undoes this. `./run-in-headset.sh` starts
-   it by hand instead. Run these as your normal user, not root.
+4. Put it in your Steam library: run `./install-launcher.sh` (no sudo), then
+   in Desktop Mode choose Steam > Games > Add a Non-Steam Game to My
+   Library, tick **Thermal Camera** and click Add. In its Properties, tick
+   **Include in VR Library**. From then on it launches from the library like
+   any game, and Steam's Stop button closes it.
+5. Or have it start with SteamVR instead: `./thermal-viewer --register`
+   (undo with `--unregister`). `./run-in-headset.sh` still starts it by hand.
+   Run these as your normal user, not root.
 
 In the headset the thermal image is a head-locked panel sized to the camera's
 field of view, so it lines up with what you're looking at.
@@ -43,9 +46,9 @@ Frames alternate between two overlay panels, each shown only once SteamVR
 has loaded it; a single panel strobes on the Frame (`--overlay-buffering
 single` brings that back for testing).
 
-Experimental (off by default): `--dashboard` adds a **Thermal Camera**
-control panel to the SteamVR dashboard (show/hide, palette, detail mode,
-opacity, size, °C/°F, Quit).
+The SteamVR dashboard has a **Thermal Camera** panel with show/hide,
+palette, detail mode, opacity, size, °C/°F and Quit (`--no-dashboard` to
+leave it out).
 
 If the camera isn't plugged in, the headset view waits for it without
 starting anything in SteamVR, and if the camera is unplugged while running,
