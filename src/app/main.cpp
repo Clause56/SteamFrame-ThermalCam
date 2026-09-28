@@ -51,7 +51,7 @@ void usage() {
         "  --format-index N / --frame-index N   pick descriptors explicitly\n"
         "  --mode M               auto|split|y16|y16-ck|grey (how to read pixels)\n"
         "  --display D            desktop|overlay|none (default: desktop)\n"
-        "  --palette P            ironbow|white|black|rainbow|arctic\n"
+        "  --palette P            arctic|ironbow|white|black|rainbow (default arctic)\n"
         "  --gain G               equalize|camera|linear (default equalize: spreads colours\n"
         "                         over the temperatures in view and boosts fine detail;\n"
         "                         camera: colour the camera's own processed picture)\n"
@@ -62,6 +62,7 @@ void usage() {
         "  --fahrenheit           show temperatures in F\n"
         "  --no-hud               hide crosshair, markers, text and colour bar\n"
         "  --overlay-distance M   --overlay-hfov DEG   --overlay-alpha A   --overlay-offset-y M\n"
+        "  --overlay-size X       panel size relative to true scale (default 0.95)\n"
         "  --dashboard            add a control panel to the SteamVR dashboard (experimental)\n"
         "  --overlay-buffering B  double|single (default double; single strobes on the Frame)\n"
         "  --log FILE             log file (default: thermal-viewer.log next to the program)\n"
@@ -216,6 +217,7 @@ int main(int argc, char** argv) {
         else if (a == "--overlay-hfov") ocfg.hfovDeg = float(atof(next()));
         else if (a == "--overlay-alpha") ocfg.alpha = float(atof(next()));
         else if (a == "--overlay-offset-y") ocfg.offsetYM = float(atof(next()));
+        else if (a == "--overlay-size") ocfg.size = float(atof(next()));
         else if (a == "--frames") maxFrames = atol(next());
         else if (a == "--snapshot") snapshot = next();
         else { fprintf(stderr, "unknown option %s\n\n", a.c_str()); usage(); return 2; }
@@ -227,6 +229,30 @@ int main(int argc, char** argv) {
         for (const auto& a : args) all += " " + a;
         logMsg("thermal-viewer starting:%s", all.c_str());
     }
+
+    // Open the camera before touching SteamVR: the headset has rebooted when
+    // the overlay was created and torn down again straight away.
+    auto makeSource = [&]() -> std::unique_ptr<FrameSource> {
+        if (sim) return std::make_unique<SimSource>();
+        return std::make_unique<UvcSource>(vid, pid, req);
+    };
+    std::unique_ptr<FrameSource> src = makeSource();
+    FrameMailbox box;
+    const bool waitForCamera = displayName == "overlay";
+    bool loggedWait = false;
+    while (!src->start(box)) {
+        if (!waitForCamera) {
+            logMsg("camera: %s", src->error().c_str());
+            fprintf(stderr, "run with --list to see what libusb can find, or --sim to test without a camera\n");
+            return 1;
+        }
+        if (!loggedWait) logMsg("waiting for the camera (%s)", src->error().c_str());
+        loggedWait = true;
+        for (int i = 0; i < 20 && !gStop; ++i) usleep(100000);
+        if (gStop) return 0;
+        src = makeSource();
+    }
+    logMsg("streaming: %s", src->describe().c_str());
 
     std::unique_ptr<Display> display;
     if (displayName == "desktop") display = makeDesktopDisplay();
@@ -245,18 +271,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::unique_ptr<FrameSource> src;
-    if (sim) src = std::make_unique<SimSource>();
-    else src = std::make_unique<UvcSource>(vid, pid, req);
-
-    FrameMailbox box;
-    if (!src->start(box)) {
-        logMsg("camera: %s", src->error().c_str());
-        fprintf(stderr, "run with --list to see what libusb can find, or --sim to test without a camera\n");
-        return 1;
-    }
-    logMsg("streaming: %s", src->describe().c_str());
-
     thermal::Renderer renderer;
     thermal::ThermalFrame tf;
     thermal::RgbaImage img;
@@ -266,6 +280,7 @@ int main(int argc, char** argv) {
     auto lastFrame = std::chrono::steady_clock::now();
     auto lastLog = lastFrame;
     bool warnedStall = false;
+    auto lastReconnect = lastFrame;
     UiState ui;
 
     while (!gStop) {
@@ -290,6 +305,16 @@ int main(int argc, char** argv) {
             if (!warnedStall && now - lastFrame > std::chrono::seconds(3)) {
                 logMsg("no frames for 3 s (%s) %s", src->stats().c_str(), src->error().c_str());
                 warnedStall = true;
+            }
+            // Camera unplugged or stalled: keep reopening it every 2 s.
+            if (!sim && now - lastFrame > std::chrono::seconds(3) && now - lastReconnect > std::chrono::seconds(2)) {
+                lastReconnect = now;
+                src->stop();
+                src = makeSource();
+                if (src->start(box)) {
+                    logMsg("camera reconnected: %s", src->describe().c_str());
+                    lastFrame = now;
+                }
             }
             continue;
         }

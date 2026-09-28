@@ -59,7 +59,7 @@ struct Button {
 
 class OverlayDisplay : public Display {
 public:
-    explicit OverlayDisplay(const OverlayConfig& c) : cfg_(c), alpha_(c.alpha) {}
+    explicit OverlayDisplay(const OverlayConfig& c) : cfg_(c), alpha_(c.alpha), sizeScale_(c.size) {}
     ~OverlayDisplay() override {
         if (vr::VROverlay())
             for (auto h : {ov_[0], ov_[1], dash_, thumb_})
@@ -275,7 +275,7 @@ private:
                 case BtnQuit: ev.quit = true; break;
                 case BtnOpacityDown:
                 case BtnOpacityUp:
-                    alpha_ = std::clamp(alpha_ + (b.id == BtnOpacityUp ? 0.1f : -0.1f), 0.2f, 1.f);
+                    alpha_ = std::clamp(alpha_ + (b.id == BtnOpacityUp ? 0.05f : -0.05f), 0.1f, 1.f);
                     for (auto h : ov_)
                         if (h != vr::k_ulOverlayHandleInvalid) vr::VROverlay()->SetOverlayAlpha(h, alpha_);
                     break;
@@ -371,7 +371,7 @@ private:
     bool inited_ = false;
     bool warnedUpload_ = false;
     float alpha_;
-    float sizeScale_ = 1.f;
+    float sizeScale_;
     int lastW_ = 0, lastH_ = 0, lastImgW_ = 0, lastImgH_ = 0, lastImgX_ = 0, lastImgY_ = 0;
     UiState ui_;
     std::vector<Button> buttons_;

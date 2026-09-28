@@ -35,7 +35,7 @@ const char* gainModeName(GainMode g);
 bool parseGainMode(const std::string& s, GainMode& out);
 
 struct RenderOptions {
-    Palette palette = Palette::Ironbow;
+    Palette palette = Palette::Arctic;
     GainMode gain = GainMode::Equalize;
     float detail = 0.5f;         // detail boost for Equalize, 0..2
     int scale = 3;               // output = sensor size * scale (bilinear)

@@ -19,7 +19,8 @@ struct DisplayEvents {
 struct OverlayConfig {
     float distanceM = 1.0f;   // how far in front of the eyes the panel sits
     float hfovDeg = 56.0f;    // camera horizontal field of view, for true-scale sizing
-    float alpha = 0.85f;      // overlay opacity (lets passthrough show through)
+    float alpha = 0.35f;      // overlay opacity (lets passthrough show through)
+    float size = 0.95f;       // panel size relative to true scale
     float offsetYM = 0.0f;    // vertical offset (camera is usually above eye level)
     bool dashboard = false;   // control panel in the SteamVR dashboard (opt-in until proven on the Frame)
     bool doubleBuffer = true;   // ping-pong between two overlays (single panel strobes on the Frame)

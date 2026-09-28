@@ -47,6 +47,10 @@ Experimental (off by default): `--dashboard` adds a **Thermal Camera**
 control panel to the SteamVR dashboard (show/hide, palette, detail mode,
 opacity, size, °C/°F, Quit).
 
+If the camera isn't plugged in, the headset view waits for it without
+starting anything in SteamVR, and if the camera is unplugged while running,
+it reconnects on its own when it's plugged back in.
+
 Every run writes `thermal-viewer.log` next to the program; send it along
 with any problem report.
 
