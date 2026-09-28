@@ -1,11 +1,17 @@
 # Builds the Steam Frame (ARM64) package and publishes it as a GitHub
-# release whenever a version tag is pushed: git tag v0.1.1 && git push origin v0.1.1
+# release whenever a version tag is pushed (git tag v0.1.1 && git push origin
+# v0.1.1), or when run by hand from the Actions tab with a version number,
+# in which case the release creates the tag.
 name: Release
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.1.1 (empty: build only)"
+        required: false
 
 permissions:
   contents: write
@@ -28,9 +34,12 @@ jobs:
           ./build/thermal-tests
 
       - name: Build ARM64 package
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0-${GITHUB_SHA::7}"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then VERSION="${GITHUB_REF_NAME#v}"
+          elif [ -n "$INPUT_VERSION" ]; then VERSION="${INPUT_VERSION#v}"
+          else VERSION="0.0.0-${GITHUB_SHA::7}"; fi
           THERMAL_VIEWER_VERSION="$VERSION" bash scripts/build-arm64.sh
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           tar -C dist -czf "thermal-viewer-arm64-$VERSION.tar.gz" thermal-viewer-arm64
@@ -41,9 +50,9 @@ jobs:
           path: thermal-viewer-arm64-*.tar.gz
 
       - name: Publish release
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || inputs.version != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "thermal-viewer-arm64-$VERSION.tar.gz" \
-            --title "thermal-viewer $VERSION" --generate-notes
+          gh release create "v$VERSION" "thermal-viewer-arm64-$VERSION.tar.gz" \
+            --target "$GITHUB_SHA" --title "thermal-viewer $VERSION" --generate-notes

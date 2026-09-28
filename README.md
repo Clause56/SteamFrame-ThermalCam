@@ -118,7 +118,8 @@ Run `thermal-viewer --help`. Desktop keys: `p` palette, `g` detail mode, `u` °C
 
 ## Releases
 
-Pushing a `v*` tag (`git tag v0.1.1 && git push origin v0.1.1`) runs
+Pushing a `v*` tag (`git tag v0.1.1 && git push origin v0.1.1`), or running
+the **Release** workflow from the Actions tab with a version number, runs
 `.github/workflows/release.yml`, which runs the tests, builds the ARM64
 package and attaches it to a GitHub release. `thermal-viewer --version`
 prints the version.
