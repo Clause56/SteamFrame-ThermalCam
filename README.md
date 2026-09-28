@@ -25,7 +25,10 @@ automatically and can be forced with `--mode`:
 
 ## On the Steam Frame
 
-1. Copy `thermal-viewer-arm64/` to the headset (Desktop Mode).
+1. Download `thermal-viewer-arm64-<version>.tar.gz` from the
+   [Releases](https://github.com/Clause56/SteamFrame-ThermalCam/releases)
+   page on the headset (Desktop Mode) and unpack it:
+   `tar xzf thermal-viewer-arm64-*.tar.gz && cd thermal-viewer-arm64`.
 2. Let your user open the camera: `sudo ./install-udev-rule.sh` (add your
    camera's `VID:PID` from `lsusb` as an argument if it's not an InfiRay /
    Topdon / PureThermal). Replug the camera.
@@ -54,8 +57,13 @@ If the camera isn't plugged in, the headset view waits for it without
 starting anything in SteamVR, and if the camera is unplugged while running,
 it reconnects on its own when it's plugged back in.
 
-Every run writes `thermal-viewer.log` next to the program; send it along
-with any problem report.
+Every run adds to `thermal-viewer.log` next to the program (each run starts
+with a `=====` line and its process ID); send it along with any problem
+report.
+
+Only one copy runs at a time; a second one exits straight away. After
+**Quit** in the dashboard panel, the program won't start again for 15
+seconds, so SteamVR can't bring the view straight back.
 
 Settings live in `thermal-viewer.conf` next to the program (alignment,
 palette, detail mode, rotation). Command-line options override it.
@@ -108,13 +116,12 @@ Run `thermal-viewer --help`. Desktop keys: `p` palette, `g` detail mode, `u` °C
   output of `./thermal-viewer --list`; try `--fps` with a lower rate.
 - Image upside down or mirrored: `--rotate 180` or `--flip h`.
 
-## Status
+## Releases
 
-The UVC protocol code follows the UVC 1.1/1.5 spec and is covered by
-hardware-free tests (descriptor parsing, payload reassembly, decoding and a
-simulated camera sending real UVC payloads). It has **not yet been run
-against a physical camera or on a Steam Frame**. Whether the Frame exposes the
-SteamVR overlay API to standalone apps is also unconfirmed.
+Pushing a `v*` tag (`git tag v0.1.1 && git push origin v0.1.1`) runs
+`.github/workflows/release.yml`, which runs the tests, builds the ARM64
+package and attaches it to a GitHub release. `thermal-viewer --version`
+prints the version.
 
 Third-party: `third_party/openvr` (Valve, BSD-3-Clause). libusb (LGPL-2.1) is
 linked statically in the ARM64 build.

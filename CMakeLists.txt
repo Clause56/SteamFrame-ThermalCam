@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(thermal_viewer CXX)
+project(thermal_viewer VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,6 +33,10 @@ add_executable(thermal-viewer
   src/display/desktop_sdl.cpp
   src/display/openvr_overlay.cpp)
 target_link_libraries(thermal-viewer PRIVATE thermal_core)
+if(NOT THERMAL_VIEWER_VERSION)
+  set(THERMAL_VIEWER_VERSION ${PROJECT_VERSION})
+endif()
+target_compile_definitions(thermal-viewer PRIVATE THERMAL_VIEWER_VERSION="${THERMAL_VIEWER_VERSION}")
 
 if(WITH_SDL2)
   pkg_check_modules(SDL2 IMPORTED_TARGET sdl2)

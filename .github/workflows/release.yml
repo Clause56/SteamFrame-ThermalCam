@@ -1,0 +1,49 @@
+# Builds the Steam Frame (ARM64) package and publishes it as a GitHub
+# release whenever a version tag is pushed: git tag v0.1.1 && git push origin v0.1.1
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  arm64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-aarch64-linux-gnu cmake pkg-config curl bzip2 libusb-1.0-0-dev
+
+      - name: Host build and tests
+        run: |
+          cmake -B build -DWITH_SDL2=OFF
+          cmake --build build -j"$(nproc)"
+          ./build/thermal-tests
+
+      - name: Build ARM64 package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="0.0.0-${GITHUB_SHA::7}"
+          THERMAL_VIEWER_VERSION="$VERSION" bash scripts/build-arm64.sh
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          tar -C dist -czf "thermal-viewer-arm64-$VERSION.tar.gz" thermal-viewer-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thermal-viewer-arm64-${{ env.VERSION }}
+          path: thermal-viewer-arm64-*.tar.gz
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "thermal-viewer-arm64-$VERSION.tar.gz" \
+            --title "thermal-viewer $VERSION" --generate-notes

@@ -12,6 +12,8 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
 #include <vector>
 
@@ -44,6 +46,7 @@ const char* knownName(uint16_t vid, uint16_t pid) {
 void usage() {
     printf(
         "thermal-viewer: userland UVC thermal camera viewer\n\n"
+        "  --version              print the version\n"
         "  --list                 list USB devices and the formats of any UVC cameras\n"
         "  --device VID:PID       camera to open (hex), default: first UVC device\n"
         "  --sim                  use the built-in simulated camera\n"
@@ -141,6 +144,53 @@ std::vector<std::string> readConfig(const std::string& path, bool required) {
     return out;
 }
 
+// Only one copy may run: a second copy would sit waiting for the camera and
+// take it over (overlay and all) the moment the first one quits.
+// Returns false if another copy holds the lock; its PID goes in `other`.
+bool takeInstanceLock(const std::string& path, std::string& other) {
+    int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    if (fd < 0) return true;  // can't lock (read-only dir?): don't block startup
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        char buf[32] = {0};
+        ssize_t n = pread(fd, buf, sizeof buf - 1, 0);
+        other = n > 0 ? std::string(buf, size_t(n)) : "?";
+        while (!other.empty() && (other.back() == '\n' || other.back() == ' ')) other.pop_back();
+        close(fd);
+        return false;
+    }
+    std::string pid = std::to_string(getpid()) + "\n";
+    if (ftruncate(fd, 0) == 0 && pwrite(fd, pid.data(), pid.size(), 0) < 0) {}
+    return true;  // fd stays open (and locked) until the process exits
+}
+
+std::string processName(int pid) {
+    std::ifstream f("/proc/" + std::to_string(pid) + "/comm");
+    std::string name;
+    std::getline(f, name);
+    return name.empty() ? "?" : name;
+}
+
+// When Quit is pressed in the dashboard we leave a timestamp behind, so a
+// relaunch straight afterwards (e.g. SteamVR restarting its overlay apps)
+// exits instead of bringing the view back.
+const int kQuitHoldoffSec = 15;
+
+void writeQuitStamp(const std::string& path) {
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) return;
+    fprintf(f, "%ld\n", long(time(nullptr)));
+    fclose(f);
+}
+
+long secondsSinceQuit(const std::string& path) {
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) return -1;
+    long t = 0;
+    bool ok = fscanf(f, "%ld", &t) == 1;
+    fclose(f);
+    return ok ? long(time(nullptr)) - t : -1;
+}
+
 std::atomic<bool> gStop{false};
 void onSignal(int) { gStop = true; }
 
@@ -184,6 +234,7 @@ int main(int argc, char** argv) {
             return args[++i].c_str();
         };
         if (a == "-h" || a == "--help") { usage(); return 0; }
+        else if (a == "--version") { printf("thermal-viewer %s\n", THERMAL_VIEWER_VERSION); return 0; }
         else if (a == "--list") return listDevices();
         else if (a == "--sim") sim = true;
         else if (a == "--device") { if (!parseHexPair(next(), vid, pid)) { fprintf(stderr, "bad --device\n"); return 2; } }
@@ -227,7 +278,23 @@ int main(int argc, char** argv) {
     {
         std::string all;
         for (const auto& a : args) all += " " + a;
-        logMsg("thermal-viewer starting:%s", all.c_str());
+        int ppid = int(getppid());
+        logMsg("thermal-viewer %s starting (parent %d %s):%s", THERMAL_VIEWER_VERSION, ppid,
+               processName(ppid).c_str(), all.c_str());
+    }
+
+    const std::string quitStamp = exeDir() + "/.thermal-viewer.quit";
+    if (displayName == "overlay") {
+        long since = secondsSinceQuit(quitStamp);
+        if (since >= 0 && since < kQuitHoldoffSec) {
+            logMsg("Quit was pressed %lds ago; not starting again", since);
+            return 0;
+        }
+    }
+    std::string otherPid;
+    if (displayName != "none" && !takeInstanceLock(exeDir() + "/.thermal-viewer.lock", otherPid)) {
+        logMsg("already running (pid %s); exiting", otherPid.c_str());
+        return 0;
     }
 
     // Open the camera before touching SteamVR: the headset has rebooted when
@@ -290,7 +357,11 @@ int main(int argc, char** argv) {
             ui = cur;
         }
         DisplayEvents ev = display ? display->poll() : DisplayEvents{};
-        if (ev.quit) break;
+        if (ev.quit) {
+            logMsg("quit requested from the %s display", display->name());
+            if (displayName == "overlay") writeQuitStamp(quitStamp);
+            break;
+        }
         if (ev.nextPalette) ropt.palette = thermal::Palette((int(ropt.palette) + 1) % int(thermal::Palette::Count));
         if (ev.nextGain) ropt.gain = thermal::GainMode((int(ropt.gain) + 1) % int(thermal::GainMode::Count));
         if (ev.toggleUnits) ropt.fahrenheit = !ropt.fahrenheit;

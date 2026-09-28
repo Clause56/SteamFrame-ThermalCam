@@ -24,7 +24,8 @@ fi
 
 PKG_CONFIG_LIBDIR="$SYSROOT/lib/pkgconfig" PKG_CONFIG_SYSROOT_DIR= \
   cmake -S "$ROOT" -B "$WORK/build" -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/aarch64-linux-gnu.cmake" \
-  -DWITH_SDL2=OFF -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+  -DWITH_SDL2=OFF -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
+  -DTHERMAL_VIEWER_VERSION="${THERMAL_VIEWER_VERSION:-}"
 cmake --build "$WORK/build" -j"$(nproc)"
 
 OUT="$ROOT/dist/thermal-viewer-arm64"
@@ -32,6 +33,7 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 cp "$WORK/build/thermal-viewer" "$WORK/build/libopenvr_api.so" "$OUT/"
 cp "$ROOT/packaging/60-thermal-camera.rules" "$ROOT/packaging/install-udev-rule.sh" "$ROOT/packaging/run-in-headset.sh" "$ROOT/packaging/thermal-viewer.conf" "$ROOT/packaging/install-launcher.sh" "$ROOT/packaging/thermal-camera.png" "$OUT/"
 cp "$ROOT/README.md" "$OUT/"
+chmod +x "$OUT"/*.sh
 aarch64-linux-gnu-strip "$OUT/thermal-viewer"
 echo "built $OUT"
 file "$OUT/thermal-viewer"
