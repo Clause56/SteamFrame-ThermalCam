@@ -50,7 +50,7 @@ constexpr uint32_t rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
 }
 
 enum ButtonId {
-    BtnToggle, BtnPalette, BtnGain, BtnOpacityDown, BtnOpacityUp, BtnSizeDown, BtnSizeUp,
+    BtnToggle, BtnPalette, BtnGain, BtnOpacityDown, BtnOpacityUp, BtnSizeDown10, BtnSizeDown, BtnSizeUp, BtnSizeUp10,
     BtnLeft, BtnRight, BtnDown, BtnUp, BtnRotate, BtnUnits, BtnResetPos, BtnQuit
 };
 
@@ -301,12 +301,16 @@ private:
                         if (h != vr::k_ulOverlayHandleInvalid) vr::VROverlay()->SetOverlayAlpha(h, alpha_);
                     ev.settingsChanged = true;
                     break;
+                case BtnSizeDown10:
                 case BtnSizeDown:
                 case BtnSizeUp:
-                    sizePct_ = std::clamp(sizePct_ + (b.id == BtnSizeUp ? 1 : -1), kMinSizePct, kMaxSizePct);
+                case BtnSizeUp10: {
+                    int step = b.id == BtnSizeUp10 ? 10 : b.id == BtnSizeUp ? 1 : b.id == BtnSizeDown ? -1 : -10;
+                    sizePct_ = std::clamp(sizePct_ + step, kMinSizePct, kMaxSizePct);
                     place();
                     ev.settingsChanged = true;
                     break;
+                }
                 case BtnLeft:
                 case BtnRight:
                 case BtnDown:
@@ -363,8 +367,12 @@ private:
         buttons_.push_back({kDashW - m - small, y, small, rowH, BtnOpacityUp, "+"});
         int labelOpacityY = y;
         y += rowH + gap;
-        buttons_.push_back({m, y, small, rowH, BtnSizeDown, "-"});
-        buttons_.push_back({kDashW - m - small, y, small, rowH, BtnSizeUp, "+"});
+        // Size: fine (1%) steps next to the label, coarse (10%) on the outside.
+        const int tiny = 95;
+        buttons_.push_back({m, y, tiny, rowH, BtnSizeDown10, "-10"});
+        buttons_.push_back({m + tiny + gap, y, tiny, rowH, BtnSizeDown, "-1"});
+        buttons_.push_back({kDashW - m - 2 * tiny - gap, y, tiny, rowH, BtnSizeUp, "+1"});
+        buttons_.push_back({kDashW - m - tiny, y, tiny, rowH, BtnSizeUp10, "+10"});
         int labelSizeY = y;
         y += rowH + gap;
         buttons_.push_back({m, y, small, rowH, BtnLeft, "LEFT"});

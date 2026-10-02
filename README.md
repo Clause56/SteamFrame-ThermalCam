@@ -50,7 +50,7 @@ has loaded it; a single panel strobes on the Frame (`--overlay-buffering
 single` brings that back for testing).
 
 The SteamVR dashboard has a **Thermal Camera** panel with show/hide,
-palette, detail mode, opacity, size (1% steps), position (Left/Right and
+palette, detail mode, opacity, size (1% and 10% steps), position (Left/Right and
 Down/Up in 0.5 cm steps, plus Reset Position) to line the image up with
 passthrough, rotation (90° steps, for a camera mounted sideways or upside
 down), °C/°F and Quit (`--no-dashboard` to leave it out). Changes made there
