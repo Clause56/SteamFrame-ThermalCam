@@ -49,7 +49,10 @@ constexpr uint32_t rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
     return uint32_t(r) | (uint32_t(g) << 8) | (uint32_t(b) << 16) | (uint32_t(a) << 24);
 }
 
-enum ButtonId { BtnToggle, BtnPalette, BtnGain, BtnOpacityDown, BtnOpacityUp, BtnSizeDown, BtnSizeUp, BtnUnits, BtnQuit };
+enum ButtonId {
+    BtnToggle, BtnPalette, BtnGain, BtnOpacityDown, BtnOpacityUp, BtnSizeDown, BtnSizeUp,
+    BtnLeft, BtnRight, BtnDown, BtnUp, BtnRotate, BtnUnits, BtnResetPos, BtnQuit
+};
 
 struct Button {
     int x, y, w, h;
@@ -59,7 +62,9 @@ struct Button {
 
 class OverlayDisplay : public Display {
 public:
-    explicit OverlayDisplay(const OverlayConfig& c) : cfg_(c), alpha_(c.alpha), sizeScale_(c.size) {}
+    explicit OverlayDisplay(const OverlayConfig& c)
+        : cfg_(c), alpha_(c.alpha), sizePct_(std::clamp(int(std::lround(c.size * 100)), kMinSizePct, kMaxSizePct)),
+          offsetX_(c.offsetXM), offsetY_(c.offsetYM) {}
     ~OverlayDisplay() override {
         if (vr::VROverlay())
             for (auto h : {ov_[0], ov_[1], dash_, thumb_})
@@ -171,14 +176,27 @@ public:
     }
 
     void setUiState(const UiState& s) override {
+        bool rotated = s.rotate != ui_.rotate;
         ui_ = s;
+        if (rotated) place();
         drawDashboard();
+    }
+
+    bool overlaySettings(OverlayConfig& out) const override {
+        out = cfg_;
+        out.alpha = alpha_;
+        out.size = sizePct_ / 100.f;
+        out.offsetXM = offsetX_;
+        out.offsetYM = offsetY_;
+        return true;
     }
 
     const char* name() const override { return "steamvr-overlay"; }
 
 private:
-    static constexpr int kDashW = 640, kDashH = 420;
+    static constexpr int kDashW = 640, kDashH = 560;
+    static constexpr int kMinSizePct = 30, kMaxSizePct = 300;
+    static constexpr float kMoveStepM = 0.005f;  // position nudge per click
 
     void upload(const thermal::RgbaImage& img) {
         int target = cfg_.doubleBuffer ? 1 - front_ : 0;
@@ -239,15 +257,18 @@ private:
     // Sizes and positions both panels so the thermal image itself (not the HUD
     // border around it) subtends the camera's field of view, centred on the
     // line of sight. That keeps it aligned with the real world at size 100%.
+    // The field of view belongs to the camera's own horizontal axis, which
+    // runs up and down the image when it is rotated 90 or 270 degrees.
     void place() {
         if (!lastW_) return;
         int imgW = lastImgW_ ? lastImgW_ : lastW_;
         int imgH = lastImgH_ ? lastImgH_ : lastH_;
-        float imageWidthM = 2.f * cfg_.distanceM * std::tan(cfg_.hfovDeg * 3.14159265f / 360.f) * sizeScale_;
-        float mpp = imageWidthM / imgW;  // metres per pixel
+        bool sideways = ui_.rotate == 90 || ui_.rotate == 270;
+        float camWidthM = 2.f * cfg_.distanceM * std::tan(cfg_.hfovDeg * 3.14159265f / 360.f) * (sizePct_ / 100.f);
+        float mpp = camWidthM / (sideways ? imgH : imgW);  // metres per pixel
         float dx = ((lastW_ / 2.f) - (lastImgX_ + imgW / 2.f)) * mpp;
         float dy = -((lastH_ / 2.f) - (lastImgY_ + imgH / 2.f)) * mpp;
-        vr::HmdMatrix34_t m = {{{1, 0, 0, dx}, {0, 1, 0, cfg_.offsetYM + dy}, {0, 0, 1, -cfg_.distanceM}}};
+        vr::HmdMatrix34_t m = {{{1, 0, 0, offsetX_ + dx}, {0, 1, 0, offsetY_ + dy}, {0, 0, 1, -cfg_.distanceM}}};
         for (auto h : ov_) {
             if (h == vr::k_ulOverlayHandleInvalid) continue;
             vr::VROverlay()->SetOverlayWidthInMeters(h, mpp * lastW_);
@@ -278,17 +299,45 @@ private:
                     alpha_ = std::clamp(alpha_ + (b.id == BtnOpacityUp ? 0.05f : -0.05f), 0.1f, 1.f);
                     for (auto h : ov_)
                         if (h != vr::k_ulOverlayHandleInvalid) vr::VROverlay()->SetOverlayAlpha(h, alpha_);
+                    ev.settingsChanged = true;
                     break;
                 case BtnSizeDown:
                 case BtnSizeUp:
-                    sizeScale_ = std::clamp(sizeScale_ * (b.id == BtnSizeUp ? 1.1f : 1.f / 1.1f), 0.3f, 3.f);
-                    if (std::fabs(sizeScale_ - 1.f) < 0.02f) sizeScale_ = 1.f;
+                    sizePct_ = std::clamp(sizePct_ + (b.id == BtnSizeUp ? 1 : -1), kMinSizePct, kMaxSizePct);
                     place();
+                    ev.settingsChanged = true;
                     break;
+                case BtnLeft:
+                case BtnRight:
+                case BtnDown:
+                case BtnUp:
+                case BtnResetPos:
+                    if (b.id == BtnResetPos) offsetX_ = offsetY_ = 0;
+                    else if (b.id == BtnLeft || b.id == BtnRight) offsetX_ = nudge(offsetX_, b.id == BtnRight);
+                    else offsetY_ = nudge(offsetY_, b.id == BtnUp);
+                    place();
+                    ev.settingsChanged = true;
+                    break;
+                case BtnRotate: ev.rotate = true; break;
             }
             drawDashboard();
             return;
         }
+    }
+
+    // One step along an axis, snapped to the step grid so values stay tidy.
+    static float nudge(float v, bool positive) {
+        float steps = std::round(v / kMoveStepM) + (positive ? 1 : -1);
+        return std::clamp(steps * kMoveStepM, -0.5f, 0.5f);
+    }
+
+    // "RIGHT 1.5 CM", "LEFT 0.5 CM", "CENTRED" ...
+    static std::string offsetLabel(float v, const char* pos, const char* neg) {
+        long mm = std::lround(v * 1000);
+        if (mm == 0) return std::string(pos) + "/" + neg + " CENTRED";
+        char buf[48];
+        snprintf(buf, sizeof buf, "%s %.1f CM", mm > 0 ? pos : neg, std::abs(mm) / 10.0);
+        return buf;
     }
 
     void drawDashboard() {
@@ -299,8 +348,10 @@ private:
         };
         char opacity[32], size[32];
         snprintf(opacity, sizeof opacity, "OPACITY %d%%", int(std::lround(alpha_ * 100)));
-        snprintf(size, sizeof size, "SIZE %d%%", int(std::lround(sizeScale_ * 100)));
-        const int m = 20, gap = 14, rowH = 56, colW = (kDashW - 2 * m - gap) / 2, small = 80;
+        snprintf(size, sizeof size, "SIZE %d%%", sizePct_);
+        const std::string horiz = offsetLabel(offsetX_, "RIGHT", "LEFT");
+        const std::string vert = offsetLabel(offsetY_, "UP", "DOWN");
+        const int m = 20, gap = 10, rowH = 50, colW = (kDashW - 2 * m - gap) / 2, small = 110;
         int y = 70;
         buttons_.clear();
         buttons_.push_back({m, y, kDashW - 2 * m, rowH, BtnToggle, visible_ ? "HIDE CAMERA VIEW" : "SHOW CAMERA VIEW"});
@@ -316,7 +367,18 @@ private:
         buttons_.push_back({kDashW - m - small, y, small, rowH, BtnSizeUp, "+"});
         int labelSizeY = y;
         y += rowH + gap;
-        buttons_.push_back({m, y, colW, rowH, BtnUnits, ui_.fahrenheit ? "UNITS *F" : "UNITS *C"});
+        buttons_.push_back({m, y, small, rowH, BtnLeft, "LEFT"});
+        buttons_.push_back({kDashW - m - small, y, small, rowH, BtnRight, "RIGHT"});
+        int labelHorizY = y;
+        y += rowH + gap;
+        buttons_.push_back({m, y, small, rowH, BtnDown, "DOWN"});
+        buttons_.push_back({kDashW - m - small, y, small, rowH, BtnUp, "UP"});
+        int labelVertY = y;
+        y += rowH + gap;
+        buttons_.push_back({m, y, colW, rowH, BtnRotate, "ROTATE " + std::to_string(ui_.rotate) + "*"});
+        buttons_.push_back({m + colW + gap, y, colW, rowH, BtnUnits, ui_.fahrenheit ? "UNITS *F" : "UNITS *C"});
+        y += rowH + gap;
+        buttons_.push_back({m, y, colW, rowH, BtnResetPos, "RESET POSITION"});
         buttons_.push_back({m + colW + gap, y, colW, rowH, BtnQuit, "QUIT"});
 
         thermal::RgbaImage img;
@@ -338,6 +400,8 @@ private:
         };
         centred(opacity, labelOpacityY);
         centred(size, labelSizeY);
+        centred(horiz.c_str(), labelHorizY);
+        centred(vert.c_str(), labelVertY);
         vr::VROverlay()->SetOverlayRaw(dash_, img.px.data(), img.width, img.height, 4);
     }
 
@@ -371,7 +435,8 @@ private:
     bool inited_ = false;
     bool warnedUpload_ = false;
     float alpha_;
-    float sizeScale_;
+    int sizePct_;               // panel size relative to true scale, in 1% steps
+    float offsetX_, offsetY_;   // metres, + is right / up
     int lastW_ = 0, lastH_ = 0, lastImgW_ = 0, lastImgH_ = 0, lastImgX_ = 0, lastImgY_ = 0;
     UiState ui_;
     std::vector<Button> buttons_;

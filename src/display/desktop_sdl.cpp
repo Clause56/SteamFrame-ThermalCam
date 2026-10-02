@@ -63,6 +63,7 @@ public:
                 case SDLK_s: ev.snapshot = true; break;
                 case SDLK_u: ev.toggleUnits = true; break;
                 case SDLK_h: ev.toggleHud = true; break;
+                case SDLK_r: ev.rotate = true; break;
                 case SDLK_f: {
                     bool fs = SDL_GetWindowFlags(win_) & SDL_WINDOW_FULLSCREEN_DESKTOP;
                     SDL_SetWindowFullscreen(win_, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);

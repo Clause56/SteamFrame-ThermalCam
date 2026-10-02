@@ -14,6 +14,8 @@ struct DisplayEvents {
     bool snapshot = false;
     bool toggleUnits = false;
     bool toggleHud = false;
+    bool rotate = false;           // turn the image a further 90 degrees clockwise
+    bool settingsChanged = false;  // opacity/size/position changed (worth saving)
 };
 
 struct OverlayConfig {
@@ -21,7 +23,8 @@ struct OverlayConfig {
     float hfovDeg = 56.0f;    // camera horizontal field of view, for true-scale sizing
     float alpha = 0.35f;      // overlay opacity (lets passthrough show through)
     float size = 0.95f;       // panel size relative to true scale
-    float offsetYM = 0.0f;    // vertical offset (camera is usually above eye level)
+    float offsetXM = 0.0f;    // horizontal offset, + is right (lines the image up with passthrough)
+    float offsetYM = 0.0f;    // vertical offset, + is up (camera is usually above eye level)
     bool dashboard = true;    // control panel in the SteamVR dashboard (confirmed working on the Frame)
     bool doubleBuffer = true;   // ping-pong between two overlays (single panel strobes on the Frame)
 };
@@ -30,8 +33,9 @@ struct OverlayConfig {
 struct UiState {
     std::string palette, gain;
     bool fahrenheit = false;
+    int rotate = 0;  // degrees clockwise
     bool operator==(const UiState& o) const {
-        return palette == o.palette && gain == o.gain && fahrenheit == o.fahrenheit;
+        return palette == o.palette && gain == o.gain && fahrenheit == o.fahrenheit && rotate == o.rotate;
     }
 };
 
@@ -42,6 +46,8 @@ public:
     virtual void present(const thermal::RgbaImage& img) = 0;
     virtual DisplayEvents poll() = 0;
     virtual void setUiState(const UiState&) {}
+    // The overlay's current opacity/size/position, if this display has them.
+    virtual bool overlaySettings(OverlayConfig&) const { return false; }
     virtual const char* name() const = 0;
 };
 

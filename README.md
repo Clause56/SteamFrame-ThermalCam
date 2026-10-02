@@ -50,8 +50,12 @@ has loaded it; a single panel strobes on the Frame (`--overlay-buffering
 single` brings that back for testing).
 
 The SteamVR dashboard has a **Thermal Camera** panel with show/hide,
-palette, detail mode, opacity, size, °C/°F and Quit (`--no-dashboard` to
-leave it out).
+palette, detail mode, opacity, size (1% steps), position (Left/Right and
+Down/Up in 0.5 cm steps, plus Reset Position) to line the image up with
+passthrough, rotation (90° steps, for a camera mounted sideways or upside
+down), °C/°F and Quit (`--no-dashboard` to leave it out). Changes made there
+are saved to `thermal-viewer.saved` next to the program and come back on the
+next launch; delete that file to go back to `thermal-viewer.conf`.
 
 If the camera isn't plugged in, the headset view waits for it without
 starting anything in SteamVR, and if the camera is unplugged while running,
@@ -106,7 +110,7 @@ thin outline markers on the hottest/coldest spots and a small centre crosshair
 (`--no-hud` hides them all). In the headset the image part is what's sized to
 the camera's field of view; the border hangs outside it.
 
-Run `thermal-viewer --help`. Desktop keys: `p` palette, `g` detail mode, `u` °C/°F, `h` HUD,
+Run `thermal-viewer --help`. Desktop keys: `p` palette, `g` detail mode, `u` °C/°F, `h` HUD, `r` rotate,
 `s` snapshot, `f` fullscreen, `q` quit.
 
 ## Troubleshooting

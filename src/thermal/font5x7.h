@@ -38,6 +38,7 @@ inline const uint8_t* glyph5x7(char c) {
     static const uint8_t colon[7] = {0, 0x0C, 0x0C, 0, 0x0C, 0x0C, 0};
     static const uint8_t slash[7] = {0, 0x01, 0x02, 0x04, 0x08, 0x10, 0};
     static const uint8_t degree[7] = {0x0C, 0x12, 0x12, 0x0C, 0, 0, 0};
+    static const uint8_t percent[7] = {0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03};
 
     if (c >= '0' && c <= '9') return digits[c - '0'];
     if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
@@ -50,6 +51,7 @@ inline const uint8_t* glyph5x7(char c) {
         case ':': return colon;
         case '/': return slash;
         case '*': return degree;
+        case '%': return percent;
         default: return nullptr;
     }
 }

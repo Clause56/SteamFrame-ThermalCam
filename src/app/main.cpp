@@ -64,7 +64,8 @@ void usage() {
         "  --flip h|v|hv  --rotate 0|90|180|270   match how the camera is mounted\n"
         "  --fahrenheit           show temperatures in F\n"
         "  --no-hud               hide crosshair, markers, text and colour bar\n"
-        "  --overlay-distance M   --overlay-hfov DEG   --overlay-alpha A   --overlay-offset-y M\n"
+        "  --overlay-distance M   --overlay-hfov DEG   --overlay-alpha A\n"
+        "  --overlay-offset-x M   --overlay-offset-y M (+ is right / up)\n"
         "  --overlay-size X       panel size relative to true scale (default 0.95)\n"
         "  --no-dashboard         don't add the control panel to the SteamVR dashboard\n"
         "  --overlay-buffering B  double|single (default double; single strobes on the Frame)\n"
@@ -74,7 +75,7 @@ void usage() {
         "                         to the program; one or more options per line, # comments)\n"
         "  --register             add to SteamVR as an overlay app that starts with SteamVR\n"
         "  --unregister           remove it again\n"
-        "\nDesktop keys: p palette, g gain mode, u C/F, h HUD, s snapshot, f fullscreen, q quit\n");
+        "\nDesktop keys: p palette, g gain mode, u C/F, h HUD, r rotate, s snapshot, f fullscreen, q quit\n");
 }
 
 int listDevices() {
@@ -191,6 +192,25 @@ long secondsSinceQuit(const std::string& path) {
     return ok ? long(time(nullptr)) - t : -1;
 }
 
+// Settings changed from the headset's dashboard panel (opacity, size,
+// position, rotation, palette ...) are kept here, in the same format as the
+// config file, and read after it, so they survive a restart.
+std::string savedSettingsPath() { return exeDir() + "/thermal-viewer.saved"; }
+
+void saveSettings(const thermal::RenderOptions& ropt, int rotate, const OverlayConfig& o) {
+    const std::string path = savedSettingsPath(), tmp = path + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "w");
+    if (!f) return;
+    fprintf(f, "# Written by thermal-viewer when settings change in the headset.\n"
+               "# Delete this file to go back to thermal-viewer.conf.\n");
+    fprintf(f, "--palette %s\n--gain %s\n--rotate %d\n%s\n", thermal::paletteName(ropt.palette),
+            thermal::gainModeName(ropt.gain), rotate, ropt.fahrenheit ? "--fahrenheit" : "--celsius");
+    fprintf(f, "--overlay-alpha %.2f\n--overlay-size %.2f\n--overlay-offset-x %.3f\n--overlay-offset-y %.3f\n", o.alpha,
+            o.size, o.offsetXM, o.offsetYM);
+    bool ok = fclose(f) == 0;
+    if (ok) rename(tmp.c_str(), path.c_str());
+}
+
 std::atomic<bool> gStop{false};
 void onSignal(int) { gStop = true; }
 
@@ -209,7 +229,17 @@ int main(int argc, char** argv) {
             configRequired = true;
         }
     std::vector<std::string> args = readConfig(configPath, configRequired);
-    for (int i = 1; i < argc; ++i) args.push_back(argv[i]);
+    std::vector<std::string> cli(argv + 1, argv + argc);
+    // Headset runs also pick up what was last set on the dashboard panel.
+    std::string finalDisplay;
+    for (const auto* list : {&args, &cli})
+        for (size_t i = 0; i + 1 < list->size(); ++i)
+            if ((*list)[i] == "--display") finalDisplay = (*list)[i + 1];
+    if (finalDisplay == "overlay") {
+        std::vector<std::string> saved = readConfig(savedSettingsPath(), false);
+        args.insert(args.end(), saved.begin(), saved.end());
+    }
+    args.insert(args.end(), cli.begin(), cli.end());
     std::string logPath = exeDir() + "/thermal-viewer.log";
 
     uint16_t vid = 0, pid = 0;
@@ -263,16 +293,20 @@ int main(int argc, char** argv) {
         else if (a == "--flip") { std::string f = next(); flipH = f.find('h') != std::string::npos; flipV = f.find('v') != std::string::npos; }
         else if (a == "--rotate") rotate = atoi(next());
         else if (a == "--fahrenheit") ropt.fahrenheit = true;
+        else if (a == "--celsius") ropt.fahrenheit = false;
         else if (a == "--no-hud") ropt.crosshair = ropt.markers = ropt.stats = ropt.colorBar = false;
         else if (a == "--overlay-distance") ocfg.distanceM = float(atof(next()));
         else if (a == "--overlay-hfov") ocfg.hfovDeg = float(atof(next()));
         else if (a == "--overlay-alpha") ocfg.alpha = float(atof(next()));
+        else if (a == "--overlay-offset-x") ocfg.offsetXM = float(atof(next()));
         else if (a == "--overlay-offset-y") ocfg.offsetYM = float(atof(next()));
         else if (a == "--overlay-size") ocfg.size = float(atof(next()));
         else if (a == "--frames") maxFrames = atol(next());
         else if (a == "--snapshot") snapshot = next();
         else { fprintf(stderr, "unknown option %s\n\n", a.c_str()); usage(); return 2; }
     }
+
+    rotate = (((rotate / 90) % 4) + 4) % 4 * 90;  // 0, 90, 180 or 270
 
     logOpen(logPath);
     {
@@ -351,7 +385,7 @@ int main(int argc, char** argv) {
     UiState ui;
 
     while (!gStop) {
-        UiState cur{thermal::paletteName(ropt.palette), thermal::gainModeName(ropt.gain), ropt.fahrenheit};
+        UiState cur{thermal::paletteName(ropt.palette), thermal::gainModeName(ropt.gain), ropt.fahrenheit, rotate};
         if (display && !(cur == ui)) {
             display->setUiState(cur);
             ui = cur;
@@ -366,6 +400,11 @@ int main(int argc, char** argv) {
         if (ev.nextGain) ropt.gain = thermal::GainMode((int(ropt.gain) + 1) % int(thermal::GainMode::Count));
         if (ev.toggleUnits) ropt.fahrenheit = !ropt.fahrenheit;
         if (ev.toggleHud) ropt.crosshair = ropt.markers = ropt.stats = ropt.colorBar = !ropt.stats;
+        if (ev.rotate) rotate = (rotate + 90) % 360;
+        OverlayConfig current;
+        if ((ev.settingsChanged || ev.nextPalette || ev.nextGain || ev.toggleUnits || ev.rotate) && display &&
+            display->overlaySettings(current))
+            saveSettings(ropt, rotate, current);
         if (ev.snapshot && !img.px.empty()) {
             std::string name = timestampedName();
             printf("%s %s\n", writePng(name, img.px.data(), img.width, img.height) ? "saved" : "failed to save", name.c_str());
