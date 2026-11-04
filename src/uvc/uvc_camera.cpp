@@ -2,9 +2,12 @@
 
 #include <libusb.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+
+#include "../util/log.h"
 
 namespace uvc {
 namespace {
@@ -22,6 +25,9 @@ constexpr int kCtrlTimeoutMs = 1000;
 constexpr int kIsoPacketsPerTransfer = 32;
 constexpr int kIsoTransfers = 10;
 constexpr int kBulkTransfers = 5;
+// How long stop() waits for cancelled transfers to come back before giving
+// up on them. Quitting must never hang on a camera that has gone away.
+constexpr auto kCancelTimeout = std::chrono::milliseconds(1000);
 
 void wr16(uint8_t* p, uint16_t v) { p[0] = v & 0xff; p[1] = v >> 8; }
 void wr32(uint8_t* p, uint32_t v) { for (int i = 0; i < 4; ++i) p[i] = (v >> (8 * i)) & 0xff; }
@@ -130,7 +136,8 @@ UvcCamera::UvcCamera() {
 
 UvcCamera::~UvcCamera() {
     close();
-    if (ctx_) libusb_exit(ctx_);
+    // libusb_exit() with transfers still in flight can block or crash.
+    if (ctx_ && !wedged_) libusb_exit(ctx_);
 }
 
 bool UvcCamera::fail(const std::string& msg) {
@@ -182,6 +189,8 @@ std::vector<DeviceSummary> UvcCamera::enumerate() {
 bool UvcCamera::open(uint16_t vid, uint16_t pid) {
     close();
     if (!ctx_) return fail("libusb_init failed");
+    if (wedged_) return fail("USB transfers from the last session are still stuck");
+    gone_ = false;
     libusb_device** list = nullptr;
     ssize_t n = libusb_get_device_list(ctx_, &list);
     libusb_device* chosen = nullptr;
@@ -198,6 +207,8 @@ bool UvcCamera::open(uint16_t vid, uint16_t pid) {
         if (cand.vc < 0 || cand.vs < 0) continue;
         chosen = list[i];
         itf = cand;
+        vid_ = dd.idVendor;
+        pid_ = dd.idProduct;
     }
     if (!chosen) {
         if (list) libusb_free_device_list(list, 1);
@@ -232,12 +243,17 @@ bool UvcCamera::claim() {
 
 void UvcCamera::close() {
     stop();
-    if (h_) {
-        if (vsIf_ >= 0) libusb_release_interface(h_, vsIf_);
-        if (vcIf_ >= 0) libusb_release_interface(h_, vcIf_);
+    if (h_ && !wedged_) {
+        // An unplugged camera gets no more requests: releasing interfaces
+        // (and libusb re-attaching kernel drivers) on a device that is gone
+        // is pointless, and closing the handle releases them anyway.
+        if (!gone_) {
+            if (vsIf_ >= 0) libusb_release_interface(h_, vsIf_);
+            if (vcIf_ >= 0) libusb_release_interface(h_, vcIf_);
+        }
         libusb_close(h_);
-        h_ = nullptr;
     }
+    h_ = nullptr;
     vcIf_ = vsIf_ = -1;
 }
 
@@ -391,11 +407,17 @@ bool UvcCamera::start(const StreamRequest& req, FrameFn onFrame) {
 
 void UvcCamera::eventLoop() {
     bool cancelled = false;
+    std::chrono::steady_clock::time_point cancelledAt;
     while (running_ || activeTransfers_ > 0) {
         if (!running_ && !cancelled) {
             // Cancel from the event thread so no callback can resubmit after us.
             for (auto* t : transfers_) libusb_cancel_transfer(t);
             cancelled = true;
+            cancelledAt = std::chrono::steady_clock::now();
+        }
+        if (cancelled && std::chrono::steady_clock::now() - cancelledAt > kCancelTimeout) {
+            wedged_ = true;  // read by stop() after join()
+            return;
         }
         timeval tv{0, 100000};
         libusb_handle_events_timeout_completed(ctx_, &tv, nullptr);
@@ -406,12 +428,19 @@ void UvcCamera::stop() {
     if (!thread_.joinable()) return;
     running_ = false;
     thread_.join();
+    if (wedged_) {
+        // Freeing a transfer libusb still owns is a use-after-free; leak them.
+        logMsg("usb: %d transfer(s) did not finish %lld ms after cancelling%s; leaving them", activeTransfers_.load(),
+               (long long)kCancelTimeout.count(), gone_ ? " (camera unplugged)" : "");
+        transfers_.clear();
+        return;
+    }
     for (auto* t : transfers_) {
         delete[] t->buffer;
         libusb_free_transfer(t);
     }
     transfers_.clear();
-    if (h_ && vsIf_ >= 0) libusb_set_interface_alt_setting(h_, vsIf_, 0);
+    if (h_ && vsIf_ >= 0 && !gone_) libusb_set_interface_alt_setting(h_, vsIf_, 0);
 }
 
 void UvcCamera::transferCallback(libusb_transfer* t) {
@@ -436,9 +465,15 @@ void UvcCamera::onTransfer(libusb_transfer* t) {
         ++transferErrors_;
     }
 
-    bool fatal = t->status == LIBUSB_TRANSFER_NO_DEVICE || t->status == LIBUSB_TRANSFER_CANCELLED;
-    if (running_ && !fatal && libusb_submit_transfer(t) == 0) return;
-    if (t->status == LIBUSB_TRANSFER_NO_DEVICE) err_ = "camera disconnected";
+    // Runs on the event thread: only atomics are written here (lastError()
+    // is read by the main thread).
+    if (t->status == LIBUSB_TRANSFER_NO_DEVICE) gone_ = true;
+    bool fatal = gone_ || t->status == LIBUSB_TRANSFER_CANCELLED;
+    if (running_ && !fatal) {
+        int rc = libusb_submit_transfer(t);
+        if (rc == 0) return;
+        if (rc == LIBUSB_ERROR_NO_DEVICE) gone_ = true;
+    }
     --activeTransfers_;
 }
 

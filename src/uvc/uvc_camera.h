@@ -79,7 +79,11 @@ public:
     const StreamingDesc& streamingDesc() const { return streaming_; }
     const NegotiatedStream& negotiated() const { return neg_; }
     uint16_t bcdUVC() const { return bcdUVC_; }
-    const std::string& lastError() const { return err_; }
+    uint16_t vid() const { return vid_; }
+    uint16_t pid() const { return pid_; }
+    // The camera went away (unplugged) while it was open.
+    bool disconnected() const { return gone_; }
+    std::string lastError() const { return gone_ ? std::string("camera disconnected") : err_; }
     std::string stats() const;
 
 private:
@@ -106,6 +110,14 @@ private:
     std::thread thread_;
     std::string err_;
     std::atomic<uint64_t> transferErrors_{0};
+    uint16_t vid_ = 0, pid_ = 0;
+    // Set once libusb reports the device gone. After that nothing but
+    // libusb_close() is sent to it: no alt-setting or release requests.
+    std::atomic<bool> gone_{false};
+    // Set if transfers never came back after cancelling them. The handle,
+    // transfers and context are then left alone (leaked) rather than freed
+    // under libusb's feet or waited on forever.
+    bool wedged_ = false;
 };
 
 }  // namespace uvc

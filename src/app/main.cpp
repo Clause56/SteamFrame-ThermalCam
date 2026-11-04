@@ -12,6 +12,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <unistd.h>
@@ -214,6 +215,25 @@ void saveSettings(const thermal::RenderOptions& ropt, int rotate, const OverlayC
 std::atomic<bool> gStop{false};
 void onSignal(int) { gStop = true; }
 
+// Shutdown must finish promptly: if a step hangs (USB teardown of an
+// unplugged camera, SteamVR) the process exits anyway after kShutdownLimitSec,
+// and the log says which step it was stuck in.
+const int kShutdownLimitSec = 6;
+std::atomic<const char*> gShutdownStep{"starting"};
+std::atomic<bool> gShutdownDone{false};
+
+void startShutdownWatchdog() {
+    std::thread([] {
+        for (int i = 0; i < kShutdownLimitSec * 10; ++i) {
+            if (gShutdownDone) return;
+            usleep(100000);
+        }
+        logMsg("shutdown stuck in '%s' for %d s; exiting without finishing it", gShutdownStep.load(),
+               kShutdownLimitSec);
+        _exit(0);
+    }).detach();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -354,6 +374,9 @@ int main(int argc, char** argv) {
         src = makeSource();
     }
     logMsg("streaming: %s", src->describe().c_str());
+    // Reconnect only to this camera, never to whatever other UVC device
+    // shows up first while it is unplugged (the headset may have its own).
+    if (!sim && !vid && !pid && src->usbId(vid, pid)) logMsg("camera is %04x:%04x; reconnects will look for it only", vid, pid);
 
     std::unique_ptr<Display> display;
     if (displayName == "desktop") display = makeDesktopDisplay();
@@ -382,6 +405,7 @@ int main(int argc, char** argv) {
     auto lastLog = lastFrame;
     bool warnedStall = false;
     auto lastReconnect = lastFrame;
+    bool reconnecting = false;
     UiState ui;
 
     while (!gStop) {
@@ -419,11 +443,16 @@ int main(int argc, char** argv) {
             // Camera unplugged or stalled: keep reopening it every 2 s.
             if (!sim && now - lastFrame > std::chrono::seconds(3) && now - lastReconnect > std::chrono::seconds(2)) {
                 lastReconnect = now;
+                if (!reconnecting) {
+                    logMsg("camera lost (%s); closing it and retrying every 2 s", src->error().c_str());
+                    reconnecting = true;
+                }
                 src->stop();
                 src = makeSource();
                 if (src->start(box)) {
                     logMsg("camera reconnected: %s", src->describe().c_str());
                     lastFrame = now;
+                    reconnecting = false;
                 }
             }
             continue;
@@ -457,12 +486,24 @@ int main(int argc, char** argv) {
         if (maxFrames && frames >= maxFrames) break;
     }
 
+    // Each step is logged, so if the headset goes down during shutdown the
+    // log shows how far it got.
+    logMsg("shutting down (camera %s)", reconnecting ? "lost" : "streaming");
+    startShutdownWatchdog();
+    gShutdownStep = "closing the camera";
     src->stop();
+    logMsg("shutdown: camera closed");
+    gShutdownStep = "closing the SteamVR overlay";
+    display.reset();
+    if (displayName != "none") logMsg("shutdown: display closed");
+    bool ok = true;
     if (!snapshot.empty() && !img.px.empty()) {
-        bool ok = writePng(snapshot, img.px.data(), img.width, img.height);
+        ok = writePng(snapshot, img.px.data(), img.width, img.height);
         printf("%s %s\n", ok ? "saved" : "failed to save", snapshot.c_str());
-        if (!ok) return 1;
     }
     logMsg("done: %ld frames  %s%s", frames, src->stats().c_str(), gStop ? " (stopped by signal)" : "");
-    return 0;
+    gShutdownStep = "releasing libusb";
+    src.reset();
+    gShutdownDone = true;
+    return ok ? 0 : 1;
 }

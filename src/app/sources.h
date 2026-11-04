@@ -47,6 +47,8 @@ public:
     virtual std::string describe() const = 0;
     virtual std::string stats() const { return {}; }
     virtual std::string error() const { return {}; }
+    // USB vendor/product of the device being streamed, if there is one.
+    virtual bool usbId(uint16_t&, uint16_t&) const { return false; }
 };
 
 class UvcSource : public FrameSource {
@@ -57,6 +59,12 @@ public:
     std::string describe() const override;
     std::string stats() const override { return cam_.stats(); }
     std::string error() const override { return cam_.lastError(); }
+    bool usbId(uint16_t& vid, uint16_t& pid) const override {
+        if (!cam_.vid() && !cam_.pid()) return false;
+        vid = cam_.vid();
+        pid = cam_.pid();
+        return true;
+    }
 
 private:
     uint16_t vid_, pid_;
